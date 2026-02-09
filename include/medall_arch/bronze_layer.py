@@ -1,77 +1,54 @@
+from airflow.providers.postgres.hooks.postgres import PostgresHook
+from airflow.models import Variable
 from datetime import datetime
+import logging
 import pandas as pd
-from include.helpers.helper import ensure_bucket, write_parquet
-from duckdb_provider.hooks.duckdb_hook import DuckDBHook
+from sqlalchemy import create_engine
+from include.helpers.helper import upload_parquet
+
+# ----------------------------
+# CONFIG
+# ----------------------------
+POSTGRES_CONN_ID = "postgres_conn"
+TABLE_NAME = "orders"
+BUCKET_NAME = "sales-lake"
+BRONZE_PREFIX = "bronze/sales"
+WATERMARK_VAR = "sales_last_updated_at"
 
 
-RAW_BUCKET = "raw"
-
-def raw_orders(execution_date=None):
-
-    ensure_bucket(RAW_BUCKET)
-
-    df = pd.read_csv(
-        "/usr/local/airflow/include/data.csv"
-    )
-
-    # Use Airflow execution_date if available, otherwise today
-    if execution_date:
-        partition_date = execution_date.strftime("%Y-%m-%d")
-    else:
-        partition_date = datetime.utcnow().strftime("%Y-%m-%d")
-
-    object_path = f"orders/{partition_date}/orders_raw.parquet"
-
-    write_parquet(
-        df,
-        RAW_BUCKET,
-        object_path,
-    )
 
 
-def bronze_table(LOCAL_DUCKDB_CONN_ID, LOCAL_DUCKDB_TABLE_NAME, RAW_BUCKET):
+def test_db_query():
+
+    last_ts = Variable.get(WATERMARK_VAR, default_var="1970-01-01 00:00:00")
+
+    request = f"""
+        SELECT * 
+        FROM orders 
+        WHERE updated_at > '{last_ts}'
     """
-    Create bronze table in DuckDB from raw data in MinIO.
-    """
-    my_duck_hook = DuckDBHook.get_hook(LOCAL_DUCKDB_CONN_ID)
-    conn = my_duck_hook.get_conn()
+    pg_hook = PostgresHook(postgres_conn_id=POSTGRES_CONN_ID) 
+    connection = pg_hook.get_conn()
+    cursor = connection.cursor()
+    cursor.execute(request)
+    rows = cursor.fetchall()
 
-    # Define the path to the raw parquet file in MinIO
-    raw_parquet_path = f"s3://{RAW_BUCKET}/orders/*/orders_raw.parquet"
+    if not rows:
+        return "no new data to return"
+    
+    columns = [desc[0] for desc in cursor.description]
 
-    # Install and load httpfs extension
-    conn.execute("INSTALL httpfs;")
-    conn.execute("LOAD httpfs;")
+    # Convert to DataFrame
+    df = pd.DataFrame(rows, columns=columns)
 
-    # Configure S3 settings for MinIO
-    conn.execute("""
-        SET s3_endpoint='minio:9000';
-        SET s3_access_key_id='minioadmin';
-        SET s3_secret_access_key='minioadmin';
-        SET s3_use_ssl=false;
-        SET s3_url_style='path';
-    """)
+    load_date = datetime.utcnow().strftime("%Y-%m-%d")
+    object_name = f"{BRONZE_PREFIX}/load_date={load_date}/sales_{datetime.utcnow().strftime('%H%M%S')}.parquet"
 
-    try:
-        # Create the bronze table if it doesn't exist
-        conn.execute(
-            f"""
-            CREATE TABLE IF NOT EXISTS bronze.{LOCAL_DUCKDB_TABLE_NAME} AS
-            SELECT * FROM read_parquet('{raw_parquet_path}');
-            """
-        )
+    upload_parquet(df, BUCKET_NAME, object_name)
 
-        # Test print to verify data load
-        result = conn.execute(f"SELECT * FROM {LOCAL_DUCKDB_TABLE_NAME} LIMIT 5;").fetchall()
-        print("Bronze Table Sample Data:", result)
-    except Exception as e:
-        print(f"Error creating bronze table: {e}")
-        # Try to list what's actually in the bucket for debugging
-        try:
-            test_result = conn.execute(f"SELECT * FROM read_parquet('s3://{RAW_BUCKET}/orders/*/orders_raw.parquet');").fetchall()
-            print("Direct read test:", test_result)
-        except Exception as e2:
-            print(f"Direct read also failed: {e2}")
-        raise
-    finally:
-        conn.close()
+    new_ts = df["updated_at"].max().strftime("%Y-%m-%d %H:%M:%S")
+    Variable.set(WATERMARK_VAR, new_ts)
+    print(f"Updated watermark to {new_ts}")
+
+
+    
