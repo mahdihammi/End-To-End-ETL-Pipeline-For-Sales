@@ -67,7 +67,6 @@ def creating_views(LOCAL_DUCKDB_CONN_ID):
 
                             {bronze_query}
                         '''
-        print(bronze_query)
 
         conn.execute(bronze_query)
 
@@ -75,6 +74,12 @@ def creating_views(LOCAL_DUCKDB_CONN_ID):
 
 
         silver_query = load_sql('views/history_silver_transformation.sql')
+        
+        silver_query = f'''
+                            CREATE VIEW IF NOT EXISTS {DUCKLAKE_NAME}.silver.silver_view AS \n
+
+                            {silver_query} '''
+        
         conn.execute(silver_query)
 
         logging.info('backfill silver view created successfully')
