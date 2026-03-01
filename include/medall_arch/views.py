@@ -1,3 +1,5 @@
+from tkinter import EXCEPTION
+
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from duckdb_provider.hooks.duckdb_hook import DuckDBHook
 from airflow.models import Variable
@@ -34,7 +36,7 @@ SUPABASE_USER = os.getenv("SUPABASE_USER")
 SUPABASE_PWD = os.getenv("SUPABASE_PWD")
 DUCKDB_SECRET = os.getenv('DUCKDB_SECRET')
 
-def creating_views(LOCAL_DUCKDB_CONN_ID,POSTGRES_CONN_ID):
+def creating_views(LOCAL_DUCKDB_CONN_ID):
     '''
     fct for creating views
     '''
@@ -42,25 +44,38 @@ def creating_views(LOCAL_DUCKDB_CONN_ID,POSTGRES_CONN_ID):
     LOCAL_DUCKDB_CONN_ID = LOCAL_DUCKDB_CONN_ID
     my_duck_hook = DuckDBHook.get_hook(LOCAL_DUCKDB_CONN_ID)
     conn = my_duck_hook.get_conn()
-    pg_hook = PostgresHook(postgres_conn_id=POSTGRES_CONN_ID)
 
+    try:
 
-    logging.info('creating bronze view')
+        attach_ducklake_and_set_secrets(
+                DBNAME,SUPABASE_HOST,
+                SUPABASE_PORT,SUPABASE_USER,
+                SUPABASE_PWD, MINIO_ENDPOINT,
+                MINIO_ACCESS_KEY,MINIO_SECRET_KEY,
+                conn,
+                DUCKDB_SECRET
+            )
+        logging.info('ducklake attached successfully')
+    except Exception as e:
 
-    attach_ducklake_and_set_secrets(
-            DBNAME,SUPABASE_HOST,
-            SUPABASE_PORT,SUPABASE_USER,
-            SUPABASE_PWD, MINIO_ENDPOINT,
-            MINIO_ACCESS_KEY,MINIO_SECRET_KEY,
-            conn,
-            DUCKDB_SECRET
-        )
+            logging.error(f"Error Attaching ducklake: {e}")
+            raise
 
-    bronze_view = load_sql('views/history_bronze.sql')
+    try:
+        bronze_query = load_sql('views/history_bronze.sql')
 
-    bronze_view = f'''
-                        CREATE VIEW IF NOT EXISTS {DUCKLAKE_NAME}.bronze.bronze_view
-                    '''
-    print(bronze_view)
+        bronze_query = f'''
+                            CREATE VIEW IF NOT EXISTS {DUCKLAKE_NAME}.bronze.bronze_view AS \n
 
-    conn.execute(bronze_view)
+                            {bronze_query}
+                        '''
+        print(bronze_query)
+
+        conn.execute(bronze_query)
+
+        logging.info("bronze_view created")
+        
+    except Exception as e:
+
+            logging.error(f"Error Attaching ducklake: {e}")
+            raise
