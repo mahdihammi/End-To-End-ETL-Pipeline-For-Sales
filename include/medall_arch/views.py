@@ -1,5 +1,3 @@
-from tkinter import EXCEPTION
-
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from duckdb_provider.hooks.duckdb_hook import DuckDBHook
 from airflow.models import Variable
@@ -74,7 +72,7 @@ def creating_views(LOCAL_DUCKDB_CONN_ID):
         conn.execute(bronze_query)
 
         logging.info("bronze_view created")
-        
+
     except Exception as e:
 
             logging.error(f"Error Attaching ducklake: {e}")

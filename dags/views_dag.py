@@ -25,11 +25,10 @@ LOCAL_DUCKDB_CONN_ID = os.environ.get('LOCAL_DUCKDB_CONN_ID')
 
 def dag_pg():
 
-    create_layer_views = creating_views(LOCAL_DUCKDB_CONN_ID)
-
     create_views = PythonOperator(
         task_id = "create_views",
-        python_callable = create_layer_views
+        python_callable = creating_views,
+        op_args=[LOCAL_DUCKDB_CONN_ID]
     )
 
     create_views
