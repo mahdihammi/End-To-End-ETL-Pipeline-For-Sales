@@ -1,41 +1,51 @@
-# include/medallion/helper.py
-
 from minio import Minio
-import pandas as pd
 import io
+import pandas as pd
+import os
 
-MINIO_ENDPOINT = "minio:9000"
-MINIO_ACCESS_KEY = "minioadmin"
-MINIO_SECRET_KEY = "minioadmin"
+# ----------------------------
+# CONFIG
+# ----------------------------
+MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "minio:9000")
+MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
+MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
+USE_SSL = False  # set True if MinIO is using SSL
 
-# RAW_BUCKET = "raw"
-# SILVER_BUCKET = "silver"
-# GOLD_BUCKET = "gold"
+# ----------------------------
+# MinIO Client
+# ----------------------------
+def get_minio_client():
+    client = Minio(
+        endpoint=MINIO_ENDPOINT,
+        access_key=MINIO_ACCESS_KEY,
+        secret_key=MINIO_SECRET_KEY,
+        secure=USE_SSL
+    )
+    return client
 
-client = Minio(
-    MINIO_ENDPOINT,
-    access_key=MINIO_ACCESS_KEY,
-    secret_key=MINIO_SECRET_KEY,
-    secure=False,
-)
+# ----------------------------
+# Helper functions
+# ----------------------------
+def upload_parquet(df: pd.DataFrame, bucket_name: str, object_name: str):
+    """
+    Upload a pandas DataFrame as parquet to MinIO
+    """
+    client = get_minio_client()
 
-def ensure_bucket(bucket: str):
-    if not client.bucket_exists(bucket):
-        client.make_bucket(bucket)
+    # Create bucket if not exists
+    if not client.bucket_exists(bucket_name):
+        client.make_bucket(bucket_name)
 
-def write_parquet(df: pd.DataFrame, bucket: str, path: str):
+    # Save df to BytesIO
     buffer = io.BytesIO()
     df.to_parquet(buffer, index=False)
     buffer.seek(0)
 
+    # Upload
     client.put_object(
-        bucket_name=bucket,
-        object_name=path,
+        bucket_name=bucket_name,
+        object_name=object_name,
         data=buffer,
-        length=buffer.getbuffer().nbytes,
-        content_type="application/octet-stream",
+        length=buffer.getbuffer().nbytes
     )
-
-def read_parquet(bucket: str, path: str) -> pd.DataFrame:
-    obj = client.get_object(bucket, path)
-    return pd.read_parquet(io.BytesIO(obj.read()))
+    print(f"Uploaded {object_name} to bucket {bucket_name}")

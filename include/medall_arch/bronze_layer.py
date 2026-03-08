@@ -1,77 +1,120 @@
-from datetime import datetime
-import pandas as pd
-from include.helpers.helper import ensure_bucket, write_parquet
+from airflow.providers.postgres.hooks.postgres import PostgresHook
 from duckdb_provider.hooks.duckdb_hook import DuckDBHook
+from airflow.models import Variable
+from datetime import datetime
+import logging
+import pandas as pd
+from sqlalchemy import create_engine
+from include.helpers.helper import upload_parquet
+from include.helpers.ducklake_init import attach_ducklake_and_set_secrets
+from dotenv import load_dotenv
+import os
 
 
-RAW_BUCKET = "raw"
+from include.helpers.sql_helper import load_sql
 
-def raw_orders(execution_date=None):
+# Load .env file
+load_dotenv()
+# ----------------------------
+# CONFIG
+# ----------------------------
 
-    ensure_bucket(RAW_BUCKET)
+TABLE_NAME = "orders"
+BUCKET_NAME = "lakehouse-project"
+BRONZE_PREFIX = "lakehouse-raw/sales"
+WATERMARK_VAR = "sales_last_updated_at"
 
-    df = pd.read_csv(
-        "/usr/local/airflow/include/data.csv"
-    )
+DBNAME = "postgres"
+MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "minio:9000")
+MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
+MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
 
-    # Use Airflow execution_date if available, otherwise today
-    if execution_date:
-        partition_date = execution_date.strftime("%Y-%m-%d")
-    else:
-        partition_date = datetime.utcnow().strftime("%Y-%m-%d")
+SUPABASE_HOST = os.getenv("SUPABASE_HOST")
+SUPABASE_PORT = os.getenv("SUPABASE_PORT")
+SUPABASE_USER = os.getenv("SUPABASE_USER")
+SUPABASE_PWD = os.getenv("SUPABASE_PWD")
+DUCKDB_SECRET = os.getenv('DUCKDB_SECRET')
 
-    object_path = f"orders/{partition_date}/orders_raw.parquet"
+class BronzeLayerManager:
+    def __init__(self, LOCAL_DUCKDB_CONN_ID, POSTGRES_CONN_ID, BRONZE_SCHEMA):
+        self.LOCAL_DUCKDB_CONN_ID = LOCAL_DUCKDB_CONN_ID
+        self.my_duck_hook = DuckDBHook.get_hook(LOCAL_DUCKDB_CONN_ID)
+        self.conn = self.my_duck_hook.get_conn()
+        self.pg_hook = PostgresHook(postgres_conn_id=POSTGRES_CONN_ID)
 
-    write_parquet(
-        df,
-        RAW_BUCKET,
-        object_path,
-    )
+    def increment_load_from_pg_to_minio(self):
+
+        last_ts = Variable.get(WATERMARK_VAR, default_var="1970-01-01 00:00:00")
+
+        request = f"""
+            SELECT * 
+            FROM orders 
+            WHERE updated_at > '{last_ts}'
+        """
+        connection = self.pg_hook.get_conn()
+        cursor = connection.cursor()
+        cursor.execute(request)
+        rows = cursor.fetchall()
+
+        if not rows:
+            return "no new data to return"
+        
+        columns = [desc[0] for desc in cursor.description]
+
+        # Convert to DataFrame
+        df = pd.DataFrame(rows, columns=columns)
+
+        print(df.shape)
+
+        load_date = datetime.utcnow().strftime("%Y-%m-%d")
+        object_name = f"{BRONZE_PREFIX}/load_date={load_date}/sales_{datetime.utcnow().strftime('%H%M%S')}.parquet"
+
+        upload_parquet(df, BUCKET_NAME, object_name)
+
+        new_ts = df["updated_at"].max().strftime("%Y-%m-%d %H:%M:%S")
+        Variable.set(WATERMARK_VAR, new_ts)
+        print(f"Updated watermark to {new_ts}")
 
 
-def bronze_table(LOCAL_DUCKDB_CONN_ID, LOCAL_DUCKDB_TABLE_NAME, RAW_BUCKET):
-    """
-    Create bronze table in DuckDB from raw data in MinIO.
-    """
-    my_duck_hook = DuckDBHook.get_hook(LOCAL_DUCKDB_CONN_ID)
-    conn = my_duck_hook.get_conn()
+    def update_or_insert_bronze_table(self):
+        """
+        This method is for updating or inserting to the bronze table with a MERGE query : 
+        for idempotency
+        """
+        
+        conn = self.conn
 
-    # Define the path to the raw parquet file in MinIO
-    raw_parquet_path = f"s3://{RAW_BUCKET}/orders/*/orders_raw.parquet"
 
-    # Install and load httpfs extension
-    conn.execute("INSTALL httpfs;")
-    conn.execute("LOAD httpfs;")
-
-    # Configure S3 settings for MinIO
-    conn.execute("""
-        SET s3_endpoint='minio:9000';
-        SET s3_access_key_id='minioadmin';
-        SET s3_secret_access_key='minioadmin';
-        SET s3_use_ssl=false;
-        SET s3_url_style='path';
-    """)
-
-    try:
-        # Create the bronze table if it doesn't exist
-        conn.execute(
-            f"""
-            CREATE TABLE IF NOT EXISTS bronze.{LOCAL_DUCKDB_TABLE_NAME} AS
-            SELECT * FROM read_parquet('{raw_parquet_path}');
-            """
+        attach_ducklake_and_set_secrets(
+            DBNAME,SUPABASE_HOST,
+            SUPABASE_PORT,SUPABASE_USER,
+            SUPABASE_PWD, MINIO_ENDPOINT,
+            MINIO_ACCESS_KEY,MINIO_SECRET_KEY,
+            conn,
+            DUCKDB_SECRET
         )
+        
 
-        # Test print to verify data load
-        result = conn.execute(f"SELECT * FROM {LOCAL_DUCKDB_TABLE_NAME} LIMIT 5;").fetchall()
-        print("Bronze Table Sample Data:", result)
-    except Exception as e:
-        print(f"Error creating bronze table: {e}")
-        # Try to list what's actually in the bucket for debugging
+        logging.info("loading credentials successfully")
+
         try:
-            test_result = conn.execute(f"SELECT * FROM read_parquet('s3://{RAW_BUCKET}/orders/*/orders_raw.parquet');").fetchall()
-            print("Direct read test:", test_result)
-        except Exception as e2:
-            print(f"Direct read also failed: {e2}")
-        raise
-    finally:
-        conn.close()
+            logging.info(f"Merge query : \n")
+
+            bronze_query = load_sql('bronze_table.sql')
+            conn.execute(bronze_query)
+            count = conn.fetchone()[0]
+
+            logging.info(f"Upsert on bronze table succeded, number of rows : {count}")
+
+        
+        except Exception as e:
+
+            logging.error(f"Error merging bronze table: {e}")
+            raise
+        finally:
+            conn.close()
+
+
+
+
+        
