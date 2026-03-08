@@ -5,14 +5,20 @@ from airflow.providers.standard.operators.python import PythonOperator
 
 from datetime import datetime
 
-from include.medall_arch.views import creating_views
+from include.medall_arch.views import ViewsManager
 
 
 
 
 
 LOCAL_DUCKDB_CONN_ID = os.environ.get('LOCAL_DUCKDB_CONN_ID')
+DUCKLAKE_NAME = "mahdi_ducklake"
 
+
+views_manager = ViewsManager(
+        LOCAL_DUCKDB_CONN_ID= LOCAL_DUCKDB_CONN_ID,
+        DUCKLAKE_NAME= DUCKLAKE_NAME
+    )
 
 
 @dag(
@@ -27,8 +33,7 @@ def dag_pg():
 
     create_views = PythonOperator(
         task_id = "create_views",
-        python_callable = creating_views,
-        op_args=[LOCAL_DUCKDB_CONN_ID]
+        python_callable = views_manager.creating_views,
     )
 
     create_views

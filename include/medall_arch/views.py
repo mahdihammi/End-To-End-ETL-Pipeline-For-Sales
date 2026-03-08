@@ -35,14 +35,14 @@ DUCKDB_SECRET = os.getenv('DUCKDB_SECRET')
 
 
 class ViewsManager:
-    def __init__(self, LOCAL_DUCKDB_CONN_ID, DUCKLAKE_NAME, SILVER_TABLE_NAME, force_rebuild = False):
+    def __init__(self, LOCAL_DUCKDB_CONN_ID, DUCKLAKE_NAME, force_rebuild = False):
         self.LOCAL_DUCKDB_CONN_ID = LOCAL_DUCKDB_CONN_ID
         self.my_duck_hook = DuckDBHook.get_hook(LOCAL_DUCKDB_CONN_ID)
         self.conn = self.my_duck_hook.get_conn()
         self.DUCKLAKE_NAME = DUCKLAKE_NAME
 
 
-    def creating_views(self, DUCKLAKE_NAME):
+    def creating_views(self):
             '''
             fct for creating views
             '''
@@ -56,7 +56,7 @@ class ViewsManager:
                         SUPABASE_PORT,SUPABASE_USER,
                         SUPABASE_PWD, MINIO_ENDPOINT,
                         MINIO_ACCESS_KEY,MINIO_SECRET_KEY,
-                        self.conn,
+                        conn,
                         DUCKDB_SECRET
                     )
                 logging.info('ducklake attached successfully')
@@ -75,7 +75,7 @@ class ViewsManager:
                     logging.info(f"Creating schema if not exists {schema}")
 
                     query = f"""
-                        CREATE SCHEMA IF NOT EXISTS {DUCKLAKE_NAME}.{schema};
+                        CREATE SCHEMA IF NOT EXISTS {self.DUCKLAKE_NAME}.{schema};
                     """
 
                     conn.execute(query)
@@ -92,7 +92,7 @@ class ViewsManager:
                 bronze_query = load_sql('views/history_bronze.sql')
 
                 bronze_query = f'''
-                                    CREATE VIEW IF NOT EXISTS {DUCKLAKE_NAME}.bronze.bronze_view AS \n
+                                    CREATE VIEW IF NOT EXISTS {self.DUCKLAKE_NAME}.bronze.bronze_view AS \n
 
                                     {bronze_query}
                                 '''
@@ -105,7 +105,7 @@ class ViewsManager:
                 silver_query = load_sql('views/history_silver_transformation.sql')
                 
                 silver_query = f'''
-                                    CREATE VIEW IF NOT EXISTS {DUCKLAKE_NAME}.silver.silver_view AS \n
+                                    CREATE VIEW IF NOT EXISTS {self.DUCKLAKE_NAME}.silver.silver_view AS \n
 
                                     {silver_query} '''
                 
