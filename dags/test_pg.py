@@ -6,11 +6,17 @@ from airflow.providers.standard.operators.python import PythonOperator
 from datetime import datetime
 from include.medall_arch.bronze_layer import BronzeLayerManager
 from include.medall_arch.silver_layer import SilverLayerManager
-
+from dotenv import load_dotenv
 import os
+import logging
+
+load_dotenv()
+
 LOCAL_DUCKDB_CONN_ID = os.environ.get('LOCAL_DUCKDB_CONN_ID')
 POSTGRES_CONN_ID = os.environ.get('POSTGRES_CONN_ID')
+SILVER_TABLE_NAME = "orders_silver"
 
+DUCKLAKE_NAME = os.getenv('DUCKLAKE_NAME')
 
 bronze_layer_manager = BronzeLayerManager(
     LOCAL_DUCKDB_CONN_ID= LOCAL_DUCKDB_CONN_ID,
@@ -20,6 +26,10 @@ bronze_layer_manager = BronzeLayerManager(
 
 silver_layer_manager = SilverLayerManager(
     LOCAL_DUCKDB_CONN_ID= LOCAL_DUCKDB_CONN_ID,
+    SILVER_TABLE_NAME = SILVER_TABLE_NAME,
+    DUCKLAKE_NAME = DUCKLAKE_NAME,
+    SCHEMA = "silver",
+
 )
 
 @dag(
@@ -42,7 +52,14 @@ def dag_pg():
         python_callable = bronze_layer_manager.update_or_insert_bronze_table
     )
 
-    source_increment_load  >> bronze_layer
+    silver_layer = PythonOperator(
+        task_id = 'Silver_Layer_Manager',
+        python_callable = silver_layer_manager.create_or_update_silver_table
+    )
+
+    source_increment_load  >> bronze_layer >> silver_layer
+
+    
 
 dag_pg()
 

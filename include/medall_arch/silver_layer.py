@@ -94,13 +94,18 @@ class SilverLayerManager:
 
             else:
                 logging.info(f"table {self.SILVER_TABLE_NAME} doesn't exist, recreating it ")
-                backfill_silver_query = load_sql('history_views/history_transformation.sql')
+                backfill_silver_query = load_sql('views/history_silver_transformation.sql')
+                logging.info(f"DUCKLAKE_NAME loaded: {self.DUCKLAKE_NAME}")
                 backfill_silver_query = f'''
-                        CREATE OR REPLACE TABLE {self.SILVER_TABLE_NAME} AS \n
+                        CREATE OR REPLACE TABLE {self.DUCKLAKE_NAME}.{self.SCHEMA}.{self.SILVER_TABLE_NAME} AS \n
 
                         {backfill_silver_query}
                     '''
+                logging.info(f"{backfill_silver_query}")
+
+
                 conn.execute(backfill_silver_query)
+                logging.info(f"TABLE {self.DUCKLAKE_NAME}.{self.SCHEMA}.{self.SILVER_TABLE_NAME} created successfully")
 
         
         except Exception as e:
